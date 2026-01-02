@@ -1,4 +1,4 @@
-apiVersion: openstack.example.com/v1alpha1
+apiVersion: openstack.ayr.ca/v1alpha1
 kind: OpenStackBlockStorage
 metadata:
   name: example-blockstorage
