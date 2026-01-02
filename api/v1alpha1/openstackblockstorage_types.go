@@ -1,3 +1,5 @@
+// +groupName=openstack.ayr.ca
+
 package v1alpha1
 
 import (
@@ -11,7 +13,7 @@ import (
 
 // GroupVersion definitions
 var (
-	GroupVersion  = schema.GroupVersion{Group: "openstack.example.com", Version: "v1alpha1"}
+	GroupVersion  = schema.GroupVersion{Group: "openstack.ayr.ca", Version: "v1alpha1"}
 	SchemeBuilder = &scheme.Builder{GroupVersion: GroupVersion}
 )
 
