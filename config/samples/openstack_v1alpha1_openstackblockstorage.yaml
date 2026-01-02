@@ -1,0 +1,6 @@
+apiVersion: openstack.example.com/v1alpha1
+kind: OpenStackBlockStorage
+metadata:
+  name: example-blockstorage
+spec:
+  projectName: demo
