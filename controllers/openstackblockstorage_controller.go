@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
+	"time"
 
 	"os"
 
@@ -20,17 +22,26 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 // OpenStackBlockStorageReconciler reconciles a OpenStackBlockStorage object
 type OpenStackBlockStorageReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	// ReconcileInterval is the default interval between reconciles when no
+	// events are received. Can be overridden by the OPENSTACK_RECONCILE_INTERVAL
+	// environment variable which accepts a Go duration string (e.g. "30s", "5m").
+	ReconcileInterval time.Duration
+	intervalMu        sync.RWMutex
 }
 
 //+kubebuilder:rbac:groups=openstack.ayr.ca,resources=openstackblockstorages,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=openstack.ayr.ca,resources=openstackblockstorages/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 
 func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -182,7 +193,7 @@ func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctr
 						Name:      name,
 						Namespace: inst.Namespace,
 						Labels: map[string]string{
-							"openstack.example.com/owner": inst.Name,
+							"openstack.ayr.ca/owner": inst.Name,
 						},
 					},
 					Data: map[string]string{},
@@ -240,7 +251,7 @@ func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctr
 
 	// Clean up ConfigMaps that no longer correspond to volumes
 	var cmList corev1.ConfigMapList
-	if err := r.List(ctx, &cmList, client.InNamespace(inst.Namespace), client.MatchingLabels{"openstack.example.com/owner": inst.Name}); err != nil {
+	if err := r.List(ctx, &cmList, client.InNamespace(inst.Namespace), client.MatchingLabels{"openstack.ayr.ca/owner": inst.Name}); err != nil {
 		logger.Error(err, "failed to list ConfigMaps for cleanup")
 		return ctrl.Result{}, err
 	}
@@ -260,11 +271,88 @@ func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{}, nil
+	// Compute requeue interval (may be overridden by env var). Read the
+	// reconciler's configured interval under a read lock so runtime updates
+	// from the ConfigMap watch are safe.
+	r.intervalMu.RLock()
+	current := r.ReconcileInterval
+	r.intervalMu.RUnlock()
+	requeueAfter, perr := ComputeRequeueAfter(current)
+	if perr != nil {
+		logger.Info("invalid OPENSTACK_RECONCILE_INTERVAL, using default", "err", perr.Error())
+	}
+	logger.Info("scheduling next reconcile", "after", requeueAfter.String())
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
+}
+
+// ComputeRequeueAfter returns the duration to use for requeueing reconciles.
+// If the `OPENSTACK_RECONCILE_INTERVAL` environment variable is set and is a
+// valid duration, that value is returned. Otherwise the provided
+// `defaultInterval` is returned; if that is zero, a 5-minute default is used.
+func ComputeRequeueAfter(defaultInterval time.Duration) (time.Duration, error) {
+	if s := os.Getenv("OPENSTACK_RECONCILE_INTERVAL"); s != "" {
+		d, err := time.ParseDuration(s)
+		if err != nil {
+			if defaultInterval == 0 {
+				return 5 * time.Minute, err
+			}
+			return defaultInterval, err
+		}
+		return d, nil
+	}
+	if defaultInterval == 0 {
+		return 5 * time.Minute, nil
+	}
+	return defaultInterval, nil
 }
 
 func (r *OpenStackBlockStorageReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	builder := ctrl.NewControllerManagedBy(mgr).
 		For(&openstackv1.OpenStackBlockStorage{}).
-		Complete(r)
+		Owns(&corev1.ConfigMap{})
+
+	// Optionally watch a ConfigMap for dynamic reconcile interval updates.
+	// If `OPENSTACK_RECONCILE_CONFIGMAP_NAME` is set, the controller will
+	// watch ConfigMaps and update its `ReconcileInterval` when the key
+	// `reconcile-interval` is present. Optionally restrict namespace via
+	// `OPENSTACK_RECONCILE_CONFIGMAP_NAMESPACE` (empty => watch all namespaces).
+	if cmName := os.Getenv("OPENSTACK_RECONCILE_CONFIGMAP_NAME"); cmName != "" {
+		cmNs := os.Getenv("OPENSTACK_RECONCILE_CONFIGMAP_NAMESPACE")
+		builder = builder.Watches(&source.Kind{Type: &corev1.ConfigMap{}}, handler.EnqueueRequestsFromMapFunc(func(obj client.Object) []reconcile.Request {
+			cm, ok := obj.(*corev1.ConfigMap)
+			if !ok {
+				return nil
+			}
+			if cm.Name != cmName {
+				return nil
+			}
+			if cmNs != "" && cm.Namespace != cmNs {
+				return nil
+			}
+
+			// If the ConfigMap contains a `reconcile-interval` entry, try to parse
+			// and update the reconciler's interval.
+			if s, ok := cm.Data["reconcile-interval"]; ok {
+				if d, err := time.ParseDuration(s); err == nil {
+					r.intervalMu.Lock()
+					r.ReconcileInterval = d
+					r.intervalMu.Unlock()
+				}
+			}
+
+			// Enqueue all OpenStackBlockStorage resources for reconciliation so
+			// they pick up the new interval promptly.
+			var list openstackv1.OpenStackBlockStorageList
+			if err := r.List(context.Background(), &list); err != nil {
+				return nil
+			}
+			reqs := make([]reconcile.Request, 0, len(list.Items))
+			for _, item := range list.Items {
+				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKey{Namespace: item.Namespace, Name: item.Name}})
+			}
+			return reqs
+		}))
+	}
+
+	return builder.Complete(r)
 }

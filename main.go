@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"os"
+	"time"
 
 	openstackv1 "github.com/rjeschmi/openstack-config-controller/api/v1alpha1"
 	"github.com/rjeschmi/openstack-config-controller/controllers"
@@ -26,11 +27,20 @@ func init() {
 func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
+	var reconcileInterval string
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false, "Enable leader election for controller manager.")
+	flag.StringVar(&reconcileInterval, "reconcile-interval", "5m", "Default reconcile interval (Go duration, e.g. 30s, 5m). Can be overridden by OPENSTACK_RECONCILE_INTERVAL env var.")
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
+
+	// Parse reconcile interval flag
+	d, err := time.ParseDuration(reconcileInterval)
+	if err != nil {
+		ctrl.Log.Error(err, "invalid --reconcile-interval, using default 5m", "value", reconcileInterval)
+		d = 5 * time.Minute
+	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:             scheme,
@@ -45,8 +55,9 @@ func main() {
 	}
 
 	if err = (&controllers.OpenStackBlockStorageReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		ReconcileInterval: d,
 	}).SetupWithManager(mgr); err != nil {
 		ctrl.Log.Error(err, "unable to create controller", "controller", "OpenStackBlockStorage")
 		os.Exit(1)

@@ -7,7 +7,7 @@ Quick start (local):
 1. Set OpenStack env vars (example):
 
 ```bash
-export OS_AUTH_URL=https://openstack.example.com:5000/v3
+export OS_AUTH_URL=https://openstack.ayr.ca:5000/v3
 export OS_USERNAME=admin
 export OS_PASSWORD=secret
 export OS_PROJECT_NAME=demo
@@ -19,15 +19,29 @@ export OS_PROJECT_DOMAIN_NAME=Default
 
 ```bash
 go mod download
-go run ./...
+go run ./... --reconcile-interval=5m
 ```
 
 3. Apply the CRD and sample CR in your cluster:
 
 ```bash
-kubectl apply -f config/crd/bases/openstack.example.com_openstackblockstorages.yaml
+kubectl apply -f config/crd/bases/openstack.ayr.ca_openstackblockstorages.yaml
 kubectl apply -f config/samples/openstack_v1alpha1_openstackblockstorage.yaml
 ```
+
+Notes on reconcile interval:
+- CLI flag: `--reconcile-interval` (Go duration string, e.g. `30s`, `5m`)
+- Env var override: `OPENSTACK_RECONCILE_INTERVAL` (same format)
+
+Running tests
+-
+To run the unit tests for the controller and helpers run:
+
+```bash
+go test ./...
+```
+
+For verbose output or to run a specific package use the standard `go test` flags.
 
 4. Check status on the sample CR:
 
