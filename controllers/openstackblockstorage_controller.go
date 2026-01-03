@@ -41,7 +41,9 @@ type OpenStackBlockStorageReconciler struct {
 
 //+kubebuilder:rbac:groups=openstack.ayr.ca,resources=openstackblockstorages,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=openstack.ayr.ca,resources=openstackblockstorages/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=openstack.ayr.ca,resources=openstackvolumes,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=openstack.ayr.ca,resources=openstackvolumes/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
 func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -51,16 +53,60 @@ func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Authenticate to OpenStack using env vars (OS_AUTH_URL, OS_USERNAME, etc.)
-	ao, err := openstack.AuthOptionsFromEnv()
-	if err != nil {
-		logger.Error(err, "auth options from env failed")
-		return ctrl.Result{}, err
-	}
-	provider, err := openstack.AuthenticatedClient(ao)
-	if err != nil {
-		logger.Error(err, "failed to authenticate to OpenStack")
-		return ctrl.Result{}, err
+	var provider *gophercloud.ProviderClient
+	var err error
+
+	// If a cloud config secret is specified, use it for authentication.
+	if inst.Spec.Cloud != "" && inst.Spec.CloudConfig.Name != "" {
+		var secret corev1.Secret
+		secretKey := client.ObjectKey{Namespace: inst.Namespace, Name: inst.Spec.CloudConfig.Name}
+		if err := r.Get(ctx, secretKey, &secret); err != nil {
+			logger.Error(err, "unable to fetch cloud config secret", "secret", secretKey)
+			return ctrl.Result{}, err
+		}
+
+		cloudsYAML, ok := secret.Data[inst.Spec.CloudConfig.Key]
+		if !ok {
+			err := fmt.Errorf("cloud config secret %q does not contain key %q", inst.Spec.CloudConfig.Name, inst.Spec.CloudConfig.Key)
+			logger.Error(err, "invalid cloud config secret")
+			return ctrl.Result{}, err
+		}
+
+		// The gophercloud.AuthOptionsFromEnv() still reads some variables, so
+		// we must unset them to avoid conflicts.
+		os.Unsetenv("OS_AUTH_URL")
+		os.Unsetenv("OS_USERNAME")
+		os.Unsetenv("OS_PASSWORD")
+		os.Unsetenv("OS_PROJECT_NAME")
+		os.Unsetenv("OS_PROJECT_ID")
+		os.Unsetenv("OS_DOMAIN_NAME")
+		os.Unsetenv("OS_DOMAIN_ID")
+
+		authOpts, err := openstack.AuthOptionsFromYAML(cloudsYAML, inst.Spec.Cloud)
+		if err != nil {
+			logger.Error(err, "failed to parse auth options from clouds.yaml")
+			return ctrl.Result{}, err
+		}
+
+		provider, err = openstack.AuthenticatedClient(authOpts)
+		if err != nil {
+			logger.Error(err, "failed to authenticate to OpenStack using clouds.yaml")
+			return ctrl.Result{}, err
+		}
+		logger.Info("authenticated using clouds.yaml from secret", "cloud", inst.Spec.Cloud)
+	} else {
+		// Fallback to environment variables
+		ao, err := openstack.AuthOptionsFromEnv()
+		if err != nil {
+			logger.Error(err, "auth options from env failed")
+			return ctrl.Result{}, err
+		}
+		provider, err = openstack.AuthenticatedClient(ao)
+		if err != nil {
+			logger.Error(err, "failed to authenticate to OpenStack")
+			return ctrl.Result{}, err
+		}
+		logger.Info("authenticated using environment variables")
 	}
 
 	region := os.Getenv("OS_REGION_NAME")
@@ -152,23 +198,13 @@ func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctr
 		logger.Info("blockstorage client is nil before listing volumes")
 	}
 	pager := volumesv3.List(c, listOpts)
-	var found []openstackv1.VolumeStatus
+	var allVolumes []volumesv3.Volume
 	err = pager.EachPage(func(page pagination.Page) (bool, error) {
 		vols, err := volumesv3.ExtractVolumes(page)
 		if err != nil {
 			return false, err
 		}
-		for _, v := range vols {
-			vsEntry := openstackv1.VolumeStatus{
-				ID:     v.ID,
-				Name:   v.Name,
-				Status: v.Status,
-			}
-			if v.Size != 0 {
-				vsEntry.SizeGB = v.Size
-			}
-			found = append(found, vsEntry)
-		}
+		allVolumes = append(allVolumes, vols...)
 		return true, nil
 	})
 	if err != nil {
@@ -176,19 +212,32 @@ func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, fmt.Errorf("error listing volumes: %w", err)
 	}
 
-	logger.Info("volumes parsed by gophercloud", "count", len(found))
+	logger.Info("volumes parsed by gophercloud", "count", len(allVolumes))
 
-	// Reconcile ConfigMaps representing each OpenStack volume
+	var found []openstackv1.VolumeStatus
+	for _, v := range allVolumes {
+		vsEntry := openstackv1.VolumeStatus{
+			ID:     v.ID,
+			Name:   v.Name,
+			Status: v.Status,
+		}
+		if v.Size != 0 {
+			vsEntry.SizeGB = v.Size
+		}
+		found = append(found, vsEntry)
+	}
+
+	// Reconcile OpenStackVolume objects
 	desired := map[string]struct{}{}
-	for _, v := range found {
+	for _, v := range allVolumes {
 		name := fmt.Sprintf("%s-%s", inst.Name, v.ID)
 		desired[name] = struct{}{}
 
-		var cm corev1.ConfigMap
-		err := r.Get(ctx, client.ObjectKey{Namespace: inst.Namespace, Name: name}, &cm)
+		var osv openstackv1.OpenStackVolume
+		err := r.Get(ctx, client.ObjectKey{Namespace: inst.Namespace, Name: name}, &osv)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
-				cm = corev1.ConfigMap{
+				osv = openstackv1.OpenStackVolume{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      name,
 						Namespace: inst.Namespace,
@@ -196,72 +245,78 @@ func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctr
 							"openstack.ayr.ca/owner": inst.Name,
 						},
 					},
-					Data: map[string]string{},
+					Spec: openstackv1.OpenStackVolumeSpec{
+						ID:               v.ID,
+						Name:             v.Name,
+						Status:           v.Status,
+						Size:             v.Size,
+						AvailabilityZone: v.AvailabilityZone,
+						CreatedAt:        metav1.NewTime(v.CreatedAt),
+						VolumeType:       v.VolumeType,
+						Bootable:         v.Bootable,
+						Encrypted:        v.Encrypted,
+					},
 				}
-				cm.Data["id"] = v.ID
-				cm.Data["name"] = v.Name
-				cm.Data["status"] = v.Status
-				cm.Data["sizeGB"] = fmt.Sprintf("%d", v.SizeGB)
-				if err := controllerutil.SetControllerReference(&inst, &cm, r.Scheme); err != nil {
-					logger.Error(err, "failed to set owner reference on ConfigMap")
+				if err := controllerutil.SetControllerReference(&inst, &osv, r.Scheme); err != nil {
+					logger.Error(err, "failed to set owner reference on OpenStackVolume")
 					return ctrl.Result{}, err
 				}
-				if err := r.Create(ctx, &cm); err != nil {
-					logger.Error(err, "failed to create ConfigMap for volume", "name", name)
+				if err := r.Create(ctx, &osv); err != nil {
+					logger.Error(err, "failed to create OpenStackVolume", "name", name)
 					return ctrl.Result{}, err
 				}
-				logger.Info("created ConfigMap for volume", "name", name)
+				logger.Info("created OpenStackVolume", "name", name)
 				continue
 			}
-			logger.Error(err, "failed to get ConfigMap")
+			logger.Error(err, "failed to get OpenStackVolume")
 			return ctrl.Result{}, err
 		}
 
-		// Update existing ConfigMap if data changed
-		changed := false
-		if cm.Data == nil {
-			cm.Data = map[string]string{}
-			changed = true
+		// Update existing OpenStackVolume if data changed
+		desiredSpec := openstackv1.OpenStackVolumeSpec{
+			ID:               v.ID,
+			Name:             v.Name,
+			Status:           v.Status,
+			Size:             v.Size,
+			AvailabilityZone: v.AvailabilityZone,
+			CreatedAt:        metav1.NewTime(v.CreatedAt),
+			VolumeType:       v.VolumeType,
+			Bootable:         v.Bootable,
+			Encrypted:        v.Encrypted,
 		}
-		if cm.Data["id"] != v.ID {
-			cm.Data["id"] = v.ID
-			changed = true
-		}
-		if cm.Data["name"] != v.Name {
-			cm.Data["name"] = v.Name
-			changed = true
-		}
-		if cm.Data["status"] != v.Status {
-			cm.Data["status"] = v.Status
-			changed = true
-		}
-		sizeStr := fmt.Sprintf("%d", v.SizeGB)
-		if cm.Data["sizeGB"] != sizeStr {
-			cm.Data["sizeGB"] = sizeStr
-			changed = true
-		}
-		if changed {
-			if err := r.Update(ctx, &cm); err != nil {
-				logger.Error(err, "failed to update ConfigMap for volume", "name", name)
+
+		if osv.Spec.ID != desiredSpec.ID ||
+			osv.Spec.Name != desiredSpec.Name ||
+			osv.Spec.Status != desiredSpec.Status ||
+			osv.Spec.Size != desiredSpec.Size ||
+			osv.Spec.AvailabilityZone != desiredSpec.AvailabilityZone ||
+			!osv.Spec.CreatedAt.Equal(&desiredSpec.CreatedAt) ||
+			osv.Spec.VolumeType != desiredSpec.VolumeType ||
+			osv.Spec.Bootable != desiredSpec.Bootable ||
+			osv.Spec.Encrypted != desiredSpec.Encrypted {
+
+			osv.Spec = desiredSpec
+			if err := r.Update(ctx, &osv); err != nil {
+				logger.Error(err, "failed to update OpenStackVolume", "name", name)
 				return ctrl.Result{}, err
 			}
-			logger.Info("updated ConfigMap for volume", "name", name)
+			logger.Info("updated OpenStackVolume", "name", name)
 		}
 	}
 
-	// Clean up ConfigMaps that no longer correspond to volumes
-	var cmList corev1.ConfigMapList
-	if err := r.List(ctx, &cmList, client.InNamespace(inst.Namespace), client.MatchingLabels{"openstack.ayr.ca/owner": inst.Name}); err != nil {
-		logger.Error(err, "failed to list ConfigMaps for cleanup")
+	// Clean up OpenStackVolumes that no longer correspond to volumes
+	var osvList openstackv1.OpenStackVolumeList
+	if err := r.List(ctx, &osvList, client.InNamespace(inst.Namespace), client.MatchingLabels{"openstack.ayr.ca/owner": inst.Name}); err != nil {
+		logger.Error(err, "failed to list OpenStackVolumes for cleanup")
 		return ctrl.Result{}, err
 	}
-	for _, cm := range cmList.Items {
-		if _, ok := desired[cm.Name]; !ok {
-			if err := r.Delete(ctx, &cm); err != nil {
-				logger.Error(err, "failed to delete stale ConfigMap", "name", cm.Name)
+	for _, item := range osvList.Items {
+		if _, ok := desired[item.Name]; !ok {
+			if err := r.Delete(ctx, &item); err != nil {
+				logger.Error(err, "failed to delete stale OpenStackVolume", "name", item.Name)
 				return ctrl.Result{}, err
 			}
-			logger.Info("deleted stale ConfigMap", "name", cm.Name)
+			logger.Info("deleted stale OpenStackVolume", "name", item.Name)
 		}
 	}
 
@@ -309,7 +364,7 @@ func ComputeRequeueAfter(defaultInterval time.Duration) (time.Duration, error) {
 func (r *OpenStackBlockStorageReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	builder := ctrl.NewControllerManagedBy(mgr).
 		For(&openstackv1.OpenStackBlockStorage{}).
-		Owns(&corev1.ConfigMap{})
+		Owns(&openstackv1.OpenStackVolume{})
 
 	// Optionally watch a ConfigMap for dynamic reconcile interval updates.
 	// If `OPENSTACK_RECONCILE_CONFIGMAP_NAME` is set, the controller will

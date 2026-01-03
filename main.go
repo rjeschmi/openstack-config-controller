@@ -63,6 +63,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = (&controllers.OpenStackNetReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		ctrl.Log.Error(err, "unable to create controller", "controller", "OpenStackNet")
+		os.Exit(1)
+	}
+
 	ctrl.Log.Info("starting manager")
 	if err := mgr.Start(context.Background()); err != nil {
 		ctrl.Log.Error(err, "problem running manager")

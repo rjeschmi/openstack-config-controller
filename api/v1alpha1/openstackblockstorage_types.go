@@ -3,8 +3,8 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/scheme"
 )
@@ -19,6 +19,10 @@ var (
 
 // OpenStackBlockStorageSpec defines the desired state
 type OpenStackBlockStorageSpec struct {
+	// Cloud is the name of the cloud in clouds.yaml to use for authentication.
+	Cloud string `json:"cloud"`
+	// CloudConfig is a reference to the secret containing the clouds.yaml file.
+	CloudConfig corev1.SecretKeySelector `json:"cloudConfig"`
 	// ProjectName is an optional OpenStack project to query
 	ProjectName string `json:"projectName,omitempty"`
 }
@@ -54,65 +58,6 @@ type OpenStackBlockStorageList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []OpenStackBlockStorage `json:"items"`
-}
-
-func (in *OpenStackBlockStorage) DeepCopyInto(out *OpenStackBlockStorage) {
-	*out = *in
-	out.TypeMeta = in.TypeMeta
-	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
-	out.Spec = in.Spec
-	if in.Status.Volumes != nil {
-		out.Status.Volumes = make([]VolumeStatus, len(in.Status.Volumes))
-		copy(out.Status.Volumes, in.Status.Volumes)
-	} else {
-		out.Status.Volumes = nil
-	}
-}
-
-func (in *OpenStackBlockStorage) DeepCopy() *OpenStackBlockStorage {
-	if in == nil {
-		return nil
-	}
-	out := new(OpenStackBlockStorage)
-	in.DeepCopyInto(out)
-	return out
-}
-
-func (in *OpenStackBlockStorage) DeepCopyObject() runtime.Object {
-	if c := in.DeepCopy(); c != nil {
-		return c
-	}
-	return nil
-}
-
-func (in *OpenStackBlockStorageList) DeepCopyInto(out *OpenStackBlockStorageList) {
-	*out = *in
-	out.TypeMeta = in.TypeMeta
-	in.ListMeta.DeepCopyInto(&out.ListMeta)
-	if in.Items != nil {
-		out.Items = make([]OpenStackBlockStorage, len(in.Items))
-		for i := range in.Items {
-			in.Items[i].DeepCopyInto(&out.Items[i])
-		}
-	} else {
-		out.Items = nil
-	}
-}
-
-func (in *OpenStackBlockStorageList) DeepCopy() *OpenStackBlockStorageList {
-	if in == nil {
-		return nil
-	}
-	out := new(OpenStackBlockStorageList)
-	in.DeepCopyInto(out)
-	return out
-}
-
-func (in *OpenStackBlockStorageList) DeepCopyObject() runtime.Object {
-	if c := in.DeepCopy(); c != nil {
-		return c
-	}
-	return nil
 }
 
 func init() {
