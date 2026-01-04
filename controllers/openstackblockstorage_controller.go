@@ -67,11 +67,11 @@ func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctr
 		logger.Error(err, "failed to authenticate to OpenStack")
 		return ctrl.Result{}, err
 	}
-	logger.Info("authenticated using environment variables")
+	logger.V(2).Info("authenticated using environment variables")
 
 	region := os.Getenv("OS_REGION_NAME")
 	availability := os.Getenv("OS_INTERFACE")
-	logger.Info("OpenStack endpoint selection", "region", region, "interface", availability)
+	logger.V(2).Info("OpenStack endpoint selection", "region", region, "interface", availability)
 
 	var c *gophercloud.ServiceClient
 	// If a specific endpoint is provided via env, use it directly (debug/override)
@@ -96,12 +96,12 @@ func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctr
 	if c == nil {
 		lastErr = try(gophercloud.EndpointOpts{Region: region, Availability: gophercloud.Availability(availability)})
 		if lastErr != nil {
-			logger.Info("primary endpoint selection failed, trying region-only", "err", lastErr.Error())
+			logger.V(2).Info("primary endpoint selection failed, trying region-only", "err", lastErr.Error())
 			// Fallback 1: region only
 			lastErr = try(gophercloud.EndpointOpts{Region: region})
 		}
 		if lastErr != nil {
-			logger.Info("region-only selection failed, trying default endpoint resolution", "err", lastErr.Error())
+			logger.V(2).Info("region-only selection failed, trying default endpoint resolution", "err", lastErr.Error())
 			// Fallback 2: no endpoint opts (use provider/catalog defaults)
 			lastErr = try(gophercloud.EndpointOpts{})
 		}
@@ -117,10 +117,10 @@ func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctr
 				// Ensure base and v3 suffix match gophercloud expectations
 				base, berr := openstackutils.BaseEndpoint(ep)
 				if berr != nil {
-					logger.Info("alternate endpoint found but base extraction failed", "endpoint", ep, "err", berr.Error())
+					logger.V(2).Info("alternate endpoint found but base extraction failed", "endpoint", ep, "err", berr.Error())
 				} else {
 					endpoint := gophercloud.NormalizeURL(base) + "v3/"
-					logger.Info("using alternate block-storage endpoint from catalog", "endpoint", endpoint)
+					logger.V(2).Info("using alternate block-storage endpoint from catalog", "endpoint", endpoint)
 					c = &gophercloud.ServiceClient{ProviderClient: provider, Endpoint: endpoint, Type: "volumev3"}
 					lastErr = nil
 				}
@@ -139,11 +139,11 @@ func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctr
 	listOpts := volumesv3.ListOpts{}
 	// Debug: log constructed service client details before listing volumes
 	if c != nil {
-		logger.Info("blockstorage client info", "Endpoint", c.Endpoint, "ServiceURL_volumes_detail", c.ServiceURL("volumes", "detail"), "Type", c.Type)
+		logger.V(2).Info("blockstorage client info", "Endpoint", c.Endpoint, "ServiceURL_volumes_detail", c.ServiceURL("volumes", "detail"), "Type", c.Type)
 
 		// Log provider token length (do not log token contents)
 		tok := provider.Token()
-		logger.Info("provider token", "length", len(tok))
+		logger.V(2).Info("provider token", "length", len(tok))
 
 		// Raw HTTP GET to the computed service URL to capture status/body for debugging
 		rawURL := c.ServiceURL("volumes", "detail")
@@ -153,10 +153,10 @@ func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctr
 		} else {
 			defer resp.Body.Close()
 			body, _ := io.ReadAll(resp.Body)
-			logger.Info("raw GET response", "url", rawURL, "status", resp.StatusCode, "contentLength", resp.ContentLength, "headers", fmt.Sprintf("%v", resp.Header), "bodyLen", len(body), "body", string(body))
+			logger.V(2).Info("raw GET response", "url", rawURL, "status", resp.StatusCode, "contentLength", resp.ContentLength, "headers", fmt.Sprintf("%v", resp.Header), "bodyLen", len(body), "body", string(body))
 		}
 	} else {
-		logger.Info("blockstorage client is nil before listing volumes")
+		logger.V(2).Info("blockstorage client is nil before listing volumes")
 	}
 	pager := volumesv3.List(c, listOpts)
 	var allVolumes []volumesv3.Volume
@@ -174,7 +174,7 @@ func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, fmt.Errorf("error listing volumes: %w", err)
 	}
 
-	logger.Info("volumes parsed by gophercloud", "count", len(allVolumes))
+	logger.V(2).Info("volumes parsed by gophercloud", "count", len(allVolumes))
 
 	var found []openstackv1.VolumeStatus
 	for _, v := range allVolumes {
@@ -302,7 +302,7 @@ func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctr
 	if perr != nil {
 		logger.Info("invalid OPENSTACK_RECONCILE_INTERVAL, using default", "err", perr.Error())
 	}
-	logger.Info("scheduling next reconcile", "after", requeueAfter.String())
+	logger.V(2).Info("scheduling next reconcile", "after", requeueAfter.String())
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 

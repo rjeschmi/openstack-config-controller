@@ -71,9 +71,6 @@ spec:
               projectName:
                 description: ProjectName is an optional OpenStack project to query
                 type: string
-            required:
-            - cloud
-            - cloudConfig
             type: object
           status:
             description: OpenStackBlockStorageStatus defines the observed state

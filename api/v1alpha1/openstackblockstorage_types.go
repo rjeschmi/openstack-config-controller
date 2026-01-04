@@ -21,9 +21,9 @@ var (
 // OpenStackBlockStorageSpec defines the desired state
 type OpenStackBlockStorageSpec struct {
 	// Cloud is the name of the cloud in clouds.yaml to use for authentication.
-	Cloud string `json:"cloud"`
+	Cloud string `json:"cloud,omitempty"`
 	// CloudConfig is a reference to the secret containing the clouds.yaml file.
-	CloudConfig corev1.SecretKeySelector `json:"cloudConfig"`
+	CloudConfig corev1.SecretKeySelector `json:"cloudConfig,omitempty"`
 	// ProjectName is an optional OpenStack project to query
 	ProjectName string `json:"projectName,omitempty"`
 }
