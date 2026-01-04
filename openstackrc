@@ -1,0 +1,13 @@
+export OS_AUTH_URL=http://192.168.89.241/identity
+export OS_USERNAME=admin
+export OS_PASSWORD=<password>
+export OS_PROJECT_NAME=demo
+export OS_USER_DOMAIN_NAME=default
+export OS_PROJECT_DOMAIN_NAME=default
+export OS_PROJECT_ID=ec97a26f32914a50ab3e0107a854d948
+export OS_DOMAIN_ID=default
+export OS_REGION_NAME=RegionOne
+export OS_INTERFACE=public
+#export OS_IDENTITY_API_VERSION=3
+
+export OPENSTACK_RECONCILE_INTERVAL=10s

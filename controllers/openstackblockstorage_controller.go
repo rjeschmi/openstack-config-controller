@@ -18,6 +18,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -33,6 +34,7 @@ type OpenStackBlockStorageReconciler struct {
 	// environment variable which accepts a Go duration string (e.g. "30s", "5m").
 	ReconcileInterval time.Duration
 	intervalMu        sync.RWMutex
+	Recorder          record.EventRecorder
 }
 
 //+kubebuilder:rbac:groups=openstack.ayr.ca,resources=openstackblockstorages,verbs=get;list;watch;create;update;patch;delete
@@ -55,11 +57,13 @@ func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctr
 	// Fallback to environment variables
 	ao, err := openstack.AuthOptionsFromEnv()
 	if err != nil {
+		r.Recorder.Event(&inst, "Warning", "AuthFailed", fmt.Sprintf("Auth options from env failed: %v", err))
 		logger.Error(err, "auth options from env failed")
 		return ctrl.Result{}, err
 	}
 	provider, err = openstack.AuthenticatedClient(ao)
 	if err != nil {
+		r.Recorder.Event(&inst, "Warning", "AuthFailed", fmt.Sprintf("Failed to authenticate to OpenStack: %v", err))
 		logger.Error(err, "failed to authenticate to OpenStack")
 		return ctrl.Result{}, err
 	}
@@ -126,6 +130,7 @@ func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctr
 		}
 
 		if lastErr != nil {
+			r.Recorder.Event(&inst, "Warning", "EndpointFailed", fmt.Sprintf("Failed to create block storage client: %v", lastErr))
 			logger.Error(lastErr, "failed to create block storage client after fallbacks")
 			return ctrl.Result{}, lastErr
 		}
@@ -164,6 +169,7 @@ func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctr
 		return true, nil
 	})
 	if err != nil {
+		r.Recorder.Event(&inst, "Warning", "ListVolumesFailed", fmt.Sprintf("Error listing volumes: %v", err))
 		logger.Error(err, "error listing volumes")
 		return ctrl.Result{}, fmt.Errorf("error listing volumes: %w", err)
 	}
@@ -218,9 +224,11 @@ func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctr
 					return ctrl.Result{}, err
 				}
 				if err := r.Create(ctx, &osv); err != nil {
+					r.Recorder.Event(&inst, "Warning", "CreateVolumeFailed", fmt.Sprintf("Failed to create OpenStackVolume %s: %v", name, err))
 					logger.Error(err, "failed to create OpenStackVolume", "name", name)
 					return ctrl.Result{}, err
 				}
+				r.Recorder.Event(&inst, "Normal", "CreatedVolume", fmt.Sprintf("Created OpenStackVolume %s", name))
 				logger.Info("created OpenStackVolume", "name", name)
 				continue
 			}
@@ -253,6 +261,7 @@ func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctr
 
 			osv.Spec = desiredSpec
 			if err := r.Update(ctx, &osv); err != nil {
+				r.Recorder.Event(&inst, "Warning", "UpdateVolumeFailed", fmt.Sprintf("Failed to update OpenStackVolume %s: %v", name, err))
 				logger.Error(err, "failed to update OpenStackVolume", "name", name)
 				return ctrl.Result{}, err
 			}
@@ -269,6 +278,7 @@ func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctr
 	for _, item := range osvList.Items {
 		if _, ok := desired[item.Name]; !ok {
 			if err := r.Delete(ctx, &item); err != nil {
+				r.Recorder.Event(&inst, "Warning", "DeleteVolumeFailed", fmt.Sprintf("Failed to delete stale OpenStackVolume %s: %v", item.Name, err))
 				logger.Error(err, "failed to delete stale OpenStackVolume", "name", item.Name)
 				return ctrl.Result{}, err
 			}
@@ -318,8 +328,9 @@ func ComputeRequeueAfter(defaultInterval time.Duration) (time.Duration, error) {
 }
 
 func (r *OpenStackBlockStorageReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	builder := ctrl.NewControllerManagedBy(mgr).
+	r.Recorder = mgr.GetEventRecorderFor("openstackblockstorage-controller")
+	return ctrl.NewControllerManagedBy(mgr).
 		For(&openstackv1.OpenStackBlockStorage{}).
-		Owns(&openstackv1.OpenStackVolume{})
-	return builder.Complete(r)
+		Owns(&openstackv1.OpenStackVolume{}).
+		Complete(r)
 }
