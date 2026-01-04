@@ -13,6 +13,12 @@ require (
 )
 
 require (
+	github.com/hashicorp/go-uuid v1.0.3 // indirect
+	github.com/mitchellh/go-homedir v1.1.0 // indirect
+	gopkg.in/yaml.v2 v2.4.0 // indirect
+)
+
+require (
 	cel.dev/expr v0.24.0 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -39,6 +45,7 @@ require (
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/pprof v0.0.0-20241029153458-d1b30febd7db // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/gophercloud/utils v0.0.0-20231010081019-80377eca5d56
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.26.3 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect

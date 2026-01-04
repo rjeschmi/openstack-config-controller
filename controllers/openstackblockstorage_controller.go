@@ -15,17 +15,13 @@ import (
 	openstackutils "github.com/gophercloud/gophercloud/openstack/utils"
 	"github.com/gophercloud/gophercloud/pagination"
 	openstackv1 "github.com/rjeschmi/openstack-config-controller/api/v1alpha1"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 // OpenStackBlockStorageReconciler reconciles a OpenStackBlockStorage object
@@ -56,58 +52,18 @@ func (r *OpenStackBlockStorageReconciler) Reconcile(ctx context.Context, req ctr
 	var provider *gophercloud.ProviderClient
 	var err error
 
-	// If a cloud config secret is specified, use it for authentication.
-	if inst.Spec.Cloud != "" && inst.Spec.CloudConfig.Name != "" {
-		var secret corev1.Secret
-		secretKey := client.ObjectKey{Namespace: inst.Namespace, Name: inst.Spec.CloudConfig.Name}
-		if err := r.Get(ctx, secretKey, &secret); err != nil {
-			logger.Error(err, "unable to fetch cloud config secret", "secret", secretKey)
-			return ctrl.Result{}, err
-		}
-
-		cloudsYAML, ok := secret.Data[inst.Spec.CloudConfig.Key]
-		if !ok {
-			err := fmt.Errorf("cloud config secret %q does not contain key %q", inst.Spec.CloudConfig.Name, inst.Spec.CloudConfig.Key)
-			logger.Error(err, "invalid cloud config secret")
-			return ctrl.Result{}, err
-		}
-
-		// The gophercloud.AuthOptionsFromEnv() still reads some variables, so
-		// we must unset them to avoid conflicts.
-		os.Unsetenv("OS_AUTH_URL")
-		os.Unsetenv("OS_USERNAME")
-		os.Unsetenv("OS_PASSWORD")
-		os.Unsetenv("OS_PROJECT_NAME")
-		os.Unsetenv("OS_PROJECT_ID")
-		os.Unsetenv("OS_DOMAIN_NAME")
-		os.Unsetenv("OS_DOMAIN_ID")
-
-		authOpts, err := openstack.AuthOptionsFromYAML(cloudsYAML, inst.Spec.Cloud)
-		if err != nil {
-			logger.Error(err, "failed to parse auth options from clouds.yaml")
-			return ctrl.Result{}, err
-		}
-
-		provider, err = openstack.AuthenticatedClient(authOpts)
-		if err != nil {
-			logger.Error(err, "failed to authenticate to OpenStack using clouds.yaml")
-			return ctrl.Result{}, err
-		}
-		logger.Info("authenticated using clouds.yaml from secret", "cloud", inst.Spec.Cloud)
-	} else {
-		// Fallback to environment variables
-		ao, err := openstack.AuthOptionsFromEnv()
-		if err != nil {
-			logger.Error(err, "auth options from env failed")
-			return ctrl.Result{}, err
-		}
-		provider, err = openstack.AuthenticatedClient(ao)
-		if err != nil {
-			logger.Error(err, "failed to authenticate to OpenStack")
-			return ctrl.Result{}, err
-		}
-		logger.Info("authenticated using environment variables")
+	// Fallback to environment variables
+	ao, err := openstack.AuthOptionsFromEnv()
+	if err != nil {
+		logger.Error(err, "auth options from env failed")
+		return ctrl.Result{}, err
 	}
+	provider, err = openstack.AuthenticatedClient(ao)
+	if err != nil {
+		logger.Error(err, "failed to authenticate to OpenStack")
+		return ctrl.Result{}, err
+	}
+	logger.Info("authenticated using environment variables")
 
 	region := os.Getenv("OS_REGION_NAME")
 	availability := os.Getenv("OS_INTERFACE")
@@ -365,49 +321,5 @@ func (r *OpenStackBlockStorageReconciler) SetupWithManager(mgr ctrl.Manager) err
 	builder := ctrl.NewControllerManagedBy(mgr).
 		For(&openstackv1.OpenStackBlockStorage{}).
 		Owns(&openstackv1.OpenStackVolume{})
-
-	// Optionally watch a ConfigMap for dynamic reconcile interval updates.
-	// If `OPENSTACK_RECONCILE_CONFIGMAP_NAME` is set, the controller will
-	// watch ConfigMaps and update its `ReconcileInterval` when the key
-	// `reconcile-interval` is present. Optionally restrict namespace via
-	// `OPENSTACK_RECONCILE_CONFIGMAP_NAMESPACE` (empty => watch all namespaces).
-	if cmName := os.Getenv("OPENSTACK_RECONCILE_CONFIGMAP_NAME"); cmName != "" {
-		cmNs := os.Getenv("OPENSTACK_RECONCILE_CONFIGMAP_NAMESPACE")
-		builder = builder.Watches(&source.Kind{Type: &corev1.ConfigMap{}}, handler.EnqueueRequestsFromMapFunc(func(obj client.Object) []reconcile.Request {
-			cm, ok := obj.(*corev1.ConfigMap)
-			if !ok {
-				return nil
-			}
-			if cm.Name != cmName {
-				return nil
-			}
-			if cmNs != "" && cm.Namespace != cmNs {
-				return nil
-			}
-
-			// If the ConfigMap contains a `reconcile-interval` entry, try to parse
-			// and update the reconciler's interval.
-			if s, ok := cm.Data["reconcile-interval"]; ok {
-				if d, err := time.ParseDuration(s); err == nil {
-					r.intervalMu.Lock()
-					r.ReconcileInterval = d
-					r.intervalMu.Unlock()
-				}
-			}
-
-			// Enqueue all OpenStackBlockStorage resources for reconciliation so
-			// they pick up the new interval promptly.
-			var list openstackv1.OpenStackBlockStorageList
-			if err := r.List(context.Background(), &list); err != nil {
-				return nil
-			}
-			reqs := make([]reconcile.Request, 0, len(list.Items))
-			for _, item := range list.Items {
-				reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKey{Namespace: item.Namespace, Name: item.Name}})
-			}
-			return reqs
-		}))
-	}
-
 	return builder.Complete(r)
 }

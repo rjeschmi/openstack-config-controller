@@ -17,6 +17,7 @@ var (
 	SchemeBuilder = &scheme.Builder{GroupVersion: GroupVersion}
 )
 
+// +kubebuilder:object:generate:=true
 // OpenStackBlockStorageSpec defines the desired state
 type OpenStackBlockStorageSpec struct {
 	// Cloud is the name of the cloud in clouds.yaml to use for authentication.
@@ -35,6 +36,7 @@ type VolumeStatus struct {
 	Status string `json:"status,omitempty"`
 }
 
+// +kubebuilder:object:generate:=true
 // OpenStackBlockStorageStatus defines the observed state
 type OpenStackBlockStorageStatus struct {
 	// Volumes lists block storage volumes discovered in OpenStack

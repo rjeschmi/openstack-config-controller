@@ -11,8 +11,8 @@ export OS_AUTH_URL=https://openstack.ayr.ca:5000/v3
 export OS_USERNAME=admin
 export OS_PASSWORD=secret
 export OS_PROJECT_NAME=demo
-export OS_USER_DOMAIN_NAME=Default
-export OS_PROJECT_DOMAIN_NAME=Default
+export OS_USER_DOMAIN_NAME=default
+export OS_PROJECT_DOMAIN_NAME=default
 ```
 
 2. Build & run locally (uses your kubeconfig to watch CRs):

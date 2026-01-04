@@ -20,6 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// +kubebuilder:object:generate:=true
 // OpenStackVolumeSpec defines the desired state of OpenStackVolume
 type OpenStackVolumeSpec struct {
 	// ID is the UUID of the volume.
@@ -42,6 +43,7 @@ type OpenStackVolumeSpec struct {
 	Encrypted bool `json:"encrypted"`
 }
 
+// +kubebuilder:object:generate:=true
 // OpenStackVolumeStatus defines the observed state of OpenStackVolume
 type OpenStackVolumeStatus struct {
 }
@@ -59,8 +61,7 @@ type OpenStackVolume struct {
 	Status OpenStackVolumeStatus `json:"status,omitempty"`
 }
 
-//+kubebuilder:object:root=true
-
+// +kubebuilder:object:root=true
 // OpenStackVolumeList contains a list of OpenStackVolume
 type OpenStackVolumeList struct {
 	metav1.TypeMeta `json:",inline"`
