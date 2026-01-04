@@ -1,0 +1,36 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - openstack.ayr.ca
+  resources:
+  - openstackblockstorages
+  - openstackvolumes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - openstack.ayr.ca
+  resources:
+  - openstackblockstorages/status
+  - openstackvolumes/status
+  verbs:
+  - get
+  - patch
+  - update
